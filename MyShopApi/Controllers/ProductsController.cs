@@ -1,11 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using MyShopApi.Models;
+using Newtonsoft.Json.Linq;
 
 namespace MyShopApi.Controllers
 {
@@ -13,18 +17,21 @@ namespace MyShopApi.Controllers
     [ApiController]
     public class ProductsController : ControllerBase
     {
+        private IWebHostEnvironment _hostingEnvironment;    
+
         private readonly MyShopContext _context;
 
-        public ProductsController(MyShopContext context)
+        public ProductsController(MyShopContext context, IWebHostEnvironment environment)
         {
             _context = context;
+            _hostingEnvironment = environment;
         }
 
         // GET: api/Products
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Product>>> GetProducts()
         {
-            return await _context.Products.ToListAsync();
+            return await _context.Products.Include(x => x.Catgory).ToListAsync();
         }
 
         // GET: api/Products/5
@@ -37,6 +44,9 @@ namespace MyShopApi.Controllers
             {
                 return NotFound();
             }
+            var category = _context.Categories.FirstOrDefault(x => x.CategoryId == product.CatgoryId);
+            product.Catgory = category;
+            product.CatgoryId = category?.CategoryId;
 
             return product;
         }
@@ -45,7 +55,7 @@ namespace MyShopApi.Controllers
         // To protect from overposting attacks, enable the specific properties you want to bind to, for
         // more details, see https://go.microsoft.com/fwlink/?linkid=2123754.
         [HttpPut("Put/{id}")]
-        public async Task<IActionResult> PutProduct(int id, Product product)
+        public async Task<ActionResult<Product>> PutProduct(int id, Product product)
         {
             if (id != product.ProductId)
             {
@@ -70,6 +80,63 @@ namespace MyShopApi.Controllers
                 }
             }
 
+            return await GetProduct(product.ProductId);
+        }
+
+        [HttpPost("AddInvoice")]
+        public async Task<ActionResult> Addnvoice([FromBody] JObject data)
+        {
+            Customer customer = data["customerData"].ToObject<Customer>();
+            List<Product> products = data["productData"].ToObject<List<Product>>();
+
+            if (customer != null && products != null)
+            {
+                _context.Customers.Add(customer);
+                await _context.SaveChangesAsync();
+
+                var invoiceList = new List<Invoice>();
+                foreach (var product in products)
+                {
+                    var invoice = new Invoice
+                    {
+                        CustomerId = customer.CustomerId,
+                        ProductId = product.ProductId,
+                        Qty = product.Qty,
+                        Price = (product.Price + (product.Price * product.Gst / 100) -
+                                    (product.Price * product.Discount / 100)) * product.Qty,
+                    };
+                    invoiceList.Add(invoice);
+                }
+                _context.Invoices.AddRange(invoiceList);
+                await _context.SaveChangesAsync();
+            }
+            return NoContent();
+        }
+
+        [HttpPut("ModifyProductQty")]
+        public async Task<IActionResult> ModifyProductQty(List<Product> products)
+        {
+            if (products != null)
+            {
+                foreach (var product in products)
+                {
+                    var prod = _context.Products.FirstOrDefault(x => x.ProductId == product.ProductId);
+                    if (prod != null)
+                    {
+                        prod.Qty = product.Qty;
+                    }
+                }
+
+                try
+                {
+                    await _context.SaveChangesAsync();
+                }
+                catch(Exception ex)
+                {
+                    throw ex;
+                }
+                return NoContent();
+            }
             return NoContent();
         }
 
@@ -79,11 +146,43 @@ namespace MyShopApi.Controllers
         [HttpPost("Post")]
         public async Task<ActionResult<Product>> PostProduct(Product product)
         {
+            product.Image = Path.GetFileName(product.Image);
+
             _context.Products.Add(product);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetProduct", new { id = product.ProductId }, product);
+            return await GetProduct(product.ProductId);
+            //return CreatedAtAction("GetProduct", new { id = product.ProductId }, product);
         }
+
+        /// <summary>
+        /// Used to upload images in Image folder
+        /// </summary>
+        /// <param name="files"></param>
+        /// <returns></returns>
+        [HttpPost("Upload")]
+        public ActionResult Upload(IFormFile files)
+        {
+            try
+            {
+                var fileModel = new FileModel
+                {
+                    FileName = files?.FileName,
+                    FormFile = files
+                };
+
+                using FileStream filstream = System.IO.File.Create(_hostingEnvironment.WebRootPath + $@"\{fileModel.FileName}");
+                fileModel?.FormFile.CopyTo(filstream);
+                filstream.Flush();
+
+                return StatusCode(StatusCodes.Status201Created);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(StatusCodes.Status500InternalServerError);
+            }
+        }
+
 
         // DELETE: api/Products/5
         [HttpDelete("Delete/{id}")]

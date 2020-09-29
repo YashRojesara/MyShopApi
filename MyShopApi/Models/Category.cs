@@ -10,7 +10,7 @@ namespace MyShopApi.Models
             Products = new HashSet<Product>();
         }
 
-        public int CatgoryId { get; set; }
+        public int CategoryId { get; set; }
         public string CategoryName { get; set; }
 
         public virtual ICollection<Product> Products { get; set; }
